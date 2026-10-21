@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gaplashish + SSH terminal</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<style>
+:root{--bg:#0b0f14;--fg:#d7e1ea;--dim:#6b7a89;--ok:#4ade80;--err:#f87171;--acc:#38bdf8;--line:#1e2935}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 ui-monospace,Consolas,Menlo,monospace}
+body{display:flex;flex-direction:column;height:100dvh}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+header .tabs{display:flex;gap:6px}
+button,input{font:inherit;color:var(--fg);background:#121923;border:1px solid var(--line);border-radius:6px;padding:7px 10px}
+button{cursor:pointer}
+button.on{border-color:var(--acc);color:var(--acc)}
+input:focus{outline:1px solid var(--acc)}
+#who{margin-left:auto;display:flex;gap:6px;align-items:center}
+#who input{width:140px}
+#status{padding:4px 12px;font-size:13px}
+.ok{color:var(--ok)}.err{color:var(--err)}.dim{color:var(--dim)}
+.panel{flex:1;min-height:0;display:flex;flex-direction:column}
+#msgs{flex:1;overflow-y:auto;padding:10px 12px}
+.m{margin:2px 0;word-break:break-word}
+.m b{color:var(--acc)}.m.me b{color:var(--ok)}
+#cf{display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--line)}
+#cf input{flex:1}
+#lf{display:flex;flex-direction:column;gap:8px;max-width:360px;padding:16px 12px}
+#lmsg{padding:0 12px 12px}
+#txwrap{flex:1;min-height:0;display:flex;flex-direction:column}
+#txbar{display:flex;justify-content:flex-end;padding:6px 12px}
+#tx{flex:1;min-height:0;padding:0 8px 8px}
+</style>
+</head>
+<body>
+<header>
+  <div class="tabs">
+    <button id="tabChat" class="on">Chat</button>
+    <button id="tabTerm">Terminal (SSH)</button>
+  </div>
+  <div id="who"><span class="dim">ism:</span><input id="nm" maxlength="20"></div>
+</header>
+<div id="status" class="dim"></div>
+
+<section id="chat" class="panel">
+  <div id="msgs"></div>
+  <form id="cf" autocomplete="off"><input id="ci" maxlength="500" placeholder="Xabar yozing..."><button>Yuborish</button></form>
+</section>
+
+<section id="term" class="panel" hidden>
+  <form id="lf" autocomplete="off">
+    <div class="dim">Noutbukka SSH orqali ulanish</div>
+    <input id="code" placeholder="Kirish kodi" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <input id="user" placeholder="SSH login" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <input id="pw" type="password" placeholder="SSH parol" autocomplete="new-password">
+    <button>Ulanish</button>
+  </form>
+  <div id="lmsg" class="dim"></div>
+  <div id="txwrap" hidden>
+    <div id="txbar"><button id="stop">Uzish</button></div>
+    <div id="tx"></div>
+  </div>
+</section>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const wsUrl=p=>(location.protocol==='https:'?'wss://':'ws://')+location.host+p;
+const rnd=()=>Math.random().toString(36).slice(2,12);
+
+let uid='',name='';
+try{uid=localStorage.getItem('gid')||'';if(!uid){uid=rnd();localStorage.setItem('gid',uid)}name=localStorage.getItem('gname')||''}catch(e){}
+uid=uid||rnd();name=name||('Mehmon'+Math.floor(100+Math.random()*900));
+$('#nm').value=name;
+$('#nm').addEventListener('change',()=>{name=$('#nm').value.trim().slice(0,20)||name;$('#nm').value=name;try{localStorage.setItem('gname',name)}catch(e){}});
+
+function setStatus(t,c){const s=$('#status');s.textContent=t;s.className=c||'dim'}
+
+/* ----- tablar ----- */
+function showTab(which){
+  const chat=which==='chat';
+  $('#chat').hidden=!chat;$('#term').hidden=chat;
+  $('#tabChat').classList.toggle('on',chat);$('#tabTerm').classList.toggle('on',!chat);
+  if(!chat&&xt&&!$('#txwrap').hidden){fit.fit();xt.focus()}
+}
+$('#tabChat').onclick=()=>showTab('chat');
+$('#tabTerm').onclick=()=>showTab('term');
+
+/* ----- chat ----- */
+const box=$('#msgs');let cws=null,retry=0;
+function addMsg(m){
+  const d=document.createElement('div');d.className='m'+(m.uid===uid?' me':'');
+  const b=document.createElement('b');b.textContent=m.uid===uid?'siz':m.name;
+  const t=document.createElement('span');t.className='dim';
+  t.textContent=' '+new Date(m.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})+'  ';
+  d.append(b,t,document.createTextNode(m.text));box.appendChild(d);box.scrollTop=box.scrollHeight;
+}
+function connectChat(){
+  cws=new WebSocket(wsUrl('/chat'));
+  cws.onopen=()=>{retry=0;setStatus('chat: ulangan','ok')};
+  cws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch(x){return}
+    if(m.t==='history'){box.textContent='';m.msgs.forEach(addMsg)}else if(m.t==='chat')addMsg(m)};
+  cws.onclose=()=>{setStatus("chat: aloqa yo'q, qayta urinilmoqda...",'err');setTimeout(connectChat,Math.min(1000*++retry,8000))};
+}
+$('#cf').addEventListener('submit',e=>{
+  e.preventDefault();const v=$('#ci').value.trim();if(!v)return;
+  if(!cws||cws.readyState!==1){setStatus("chat: server bilan aloqa yo'q",'err');return}
+  cws.send(JSON.stringify({t:'chat',uid,name,text:v}));$('#ci').value='';
+});
+connectChat();
+
+/* ----- SSH terminal ----- */
+let sws=null,xt=null,fit=null;
+function ensureTerm(){
+  if(xt)return;
+  xt=new Terminal({cursorBlink:true,fontSize:14,fontFamily:'ui-monospace,Consolas,Menlo,monospace',theme:{background:'#0b0f14'}});
+  fit=new FitAddon.FitAddon();xt.loadAddon(fit);xt.open($('#tx'));
+  xt.onData(d=>{if(sws&&sws.readyState===1)sws.send(JSON.stringify({t:'in',d}))});
+}
+function sendResize(){if(sws&&sws.readyState===1&&xt)sws.send(JSON.stringify({t:'resize',cols:xt.cols,rows:xt.rows}))}
+function endSession(msg,cls){
+  $('#txwrap').hidden=true;$('#lf').hidden=false;
+  const l=$('#lmsg');l.textContent=msg||'';l.className=cls||'dim';
+  if(xt)xt.reset();
+  if(sws){try{sws.close()}catch(e){}sws=null}
+  $('#pw').value='';
+}
+$('#lf').addEventListener('submit',e=>{
+  e.preventDefault();if(sws)return;
+  const code=$('#code').value.trim(),user=$('#user').value.trim(),pass=$('#pw').value;
+  if(!code||!user||!pass){$('#lmsg').textContent='Hamma maydonni to\'ldiring.';$('#lmsg').className='err';return}
+  $('#lmsg').textContent='Ulanmoqda...';$('#lmsg').className='dim';
+  const w=sws=new WebSocket(wsUrl('/ssh'));
+  w.onopen=()=>w.send(JSON.stringify({t:'start',code,user,pass,cols:100,rows:30}));
+  w.onmessage=ev=>{let m;try{m=JSON.parse(ev.data)}catch(x){return}
+    if(m.t==='ready'){
+      $('#lf').hidden=true;$('#lmsg').textContent='';$('#txwrap').hidden=false;
+      ensureTerm();fit.fit();sendResize();xt.focus();
+    }else if(m.t==='out'){if(xt)xt.write(m.d)}
+    else if(m.t==='error'){endSession(m.msg,'err')}
+    else if(m.t==='closed'){endSession('Seans tugadi.','dim')}};
+  w.onclose=()=>{if(sws===w){endSession('Aloqa uzildi.','err')}};
+  w.onerror=()=>{};
+});
+$('#stop').onclick=()=>{if(sws&&sws.readyState===1)sws.send(JSON.stringify({t:'stop'}));endSession('Uzildi.','dim')};
+window.addEventListener('resize',()=>{if(xt&&!$('#txwrap').hidden&&!$('#term').hidden){fit.fit();sendResize()}});
+</script>
+</body>
+</html>
